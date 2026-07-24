@@ -52,11 +52,12 @@ public class SecurityConfig {
     // EZ HIÁNYZOTT: Ő köti össze a titkosítót a mi adatbázis-keresőnkkel (UserDetailsService)
     @Bean
     public AuthenticationProvider authenticationProvider() {
-        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
-        authProvider.setUserDetailsService(userDetailsService);
+        // A legújabb Spring Security-ben a konstruktorban (zárójelben) KÖTELEZŐ átadni!
+        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider(userDetailsService);
         authProvider.setPasswordEncoder(passwordEncoder());
         return authProvider;
     }
+
 
     // Ő az, akit az AuthController keresett (A beépített menedzser)
     @Bean
