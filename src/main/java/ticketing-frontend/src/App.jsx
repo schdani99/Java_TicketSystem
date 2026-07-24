@@ -21,13 +21,18 @@ const colors = {
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');`;
 
 // --- Sample data ---------------------------------------------------------
-const TICKETS = [
-  { id: 'A-104', title: 'Nem szinkronizál a jegyexport a raktárral', requester: 'Kovács Anna', status: 'open', priority: 'magas', created: 'júl. 22.', comments: 4 },
-  { id: 'A-103', title: 'Bejelentkezés után üres az irányítópult', requester: 'Németh Gábor', status: 'progress', priority: 'közepes', created: 'júl. 21.', comments: 2 },
-  { id: 'A-101', title: 'PDF export rossz dátumformátumot ad vissza', requester: 'Szabó Réka', status: 'open', priority: 'alacsony', created: 'júl. 20.', comments: 0 },
-  { id: 'A-098', title: 'Jelszó-visszaállító email nem érkezik meg', requester: 'Tóth Bence', status: 'closed', priority: 'magas', created: 'júl. 18.', comments: 7 },
-  { id: 'A-095', title: 'Lassú betöltés a heti riport oldalon', requester: 'Varga Eszter', status: 'progress', priority: 'közepes', created: 'júl. 17.', comments: 1 },
-];
+const [tickets, setTickets] = useState([]);
+
+useEffect(() => {
+  fetch('http://localhost:8080/api/tickets', {
+    headers: {
+      'Authorization': `Bearer ${localStorage.getItem('token')}` // A belépésnél elmentett token
+    }
+  })
+      .then(res => res.json())
+      .then(data => setTickets(data))
+      .catch(err => console.error("Hiba az adatok betöltésekor:", err));
+}, []);
 
 const STATUS_META = {
   open: { label: 'Nyitott', icon: Circle, color: colors.accent },
