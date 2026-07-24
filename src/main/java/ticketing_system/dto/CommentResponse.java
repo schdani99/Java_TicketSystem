@@ -1,4 +1,10 @@
 package ticketing_system.dto;
 
-public record CommentResponse() {
-}
+import java.time.LocalDateTime;
+
+public record CommentResponse(
+        Long id,
+        String content,
+        String authorUsername,
+        LocalDateTime createdAt
+) {}
