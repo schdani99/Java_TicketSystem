@@ -1,18 +1,42 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Ticket, ChevronDown, ChevronRight, PlusCircle, Inbox,
-  CheckCircle2, Circle, ArrowLeft, MessageSquare, Clock, AlertTriangle
+  CheckCircle2, Circle, ArrowLeft, Clock, LogOut
 } from 'lucide-react';
+
+// --- API ---------------------------------------------------------
+const API_BASE = 'http://localhost:8080';
+
+async function apiFetch(path, options = {}) {
+  const token = localStorage.getItem('token');
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  if (res.status === 401) {
+    localStorage.removeItem('token');
+    throw new Error('UNAUTHORIZED');
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `Hiba (${res.status})`);
+  }
+  return res.status === 204 ? null : res.json();
+}
 
 // --- Design tokens -----------------------------------------------------
 const colors = {
-  bg: '#F4F8F5',        // pale mint-white page background
+  bg: '#F4F8F5',
   surface: '#FFFFFF',
-  ink: '#16241C',        // near-black, green-tinted
+  ink: '#16241C',
   inkSoft: '#5B6B62',
-  primary: '#173A2E',    // deep forest green
+  primary: '#173A2E',
   primarySoft: '#2F6B4F',
-  accent: '#5FA37A',     // sap green accent
+  accent: '#5FA37A',
   border: '#DCE6DE',
   amber: '#B9822E',
   red: '#B5473B',
@@ -20,31 +44,132 @@ const colors = {
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');`;
 
-// --- Sample data ---------------------------------------------------------
-const [tickets, setTickets] = useState([]);
-
-useEffect(() => {
-  fetch('http://localhost:8080/api/tickets', {
-    headers: {
-      'Authorization': `Bearer ${localStorage.getItem('token')}` // A belépésnél elmentett token
-    }
-  })
-      .then(res => res.json())
-      .then(data => setTickets(data))
-      .catch(err => console.error("Hiba az adatok betöltésekor:", err));
-}, []);
-
+// Ticketing_system.model.Status / Priority pontos értékei alapján
 const STATUS_META = {
-  open: { label: 'Nyitott', icon: Circle, color: colors.accent },
-  progress: { label: 'Folyamatban', icon: Clock, color: colors.amber },
-  closed: { label: 'Lezárva', icon: CheckCircle2, color: colors.inkSoft },
+  OPEN: { label: 'Nyitott', icon: Circle, color: colors.accent },
+  IN_PROGRESS: { label: 'Folyamatban', icon: Clock, color: colors.amber },
+  RESOLVED: { label: 'Megoldva', icon: CheckCircle2, color: colors.primarySoft },
+  CLOSED: { label: 'Lezárva', icon: CheckCircle2, color: colors.inkSoft },
 };
 
 const PRIORITY_META = {
-  magas: colors.red,
-  közepes: colors.amber,
-  alacsony: colors.inkSoft,
+  LOW: { label: 'Alacsony', color: colors.inkSoft },
+  MEDIUM: { label: 'Közepes', color: colors.amber },
+  HIGH: { label: 'Magas', color: colors.red },
+  URGENT: { label: 'Sürgős', color: colors.red },
 };
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('hu-HU', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+// --- Login ---------------------------------------------------------
+function LoginForm({ onLogin }) {
+  const [mode, setMode] = useState('login'); // 'login' | 'register'
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const path = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      // Regisztrációnál szándékosan fix "USER" szerepkört küldünk —
+      // a role mezőt sosem szabad a kliensre bízni egy nyilvános formon.
+      const body = mode === 'login'
+          ? { username, password }
+          : { username, email, password, role: 'USER' };
+
+      const res = await fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        throw new Error(mode === 'login' ? 'Hibás felhasználónév vagy jelszó' : 'Nem sikerült a regisztráció');
+      }
+      const data = await res.json();
+      localStorage.setItem('token', data.token);
+      onLogin();
+    } catch (err) {
+      setError(err.message || 'Hiba történt');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: colors.bg, fontFamily: "'Manrope', sans-serif" }}>
+        <style>{FONT_IMPORT}</style>
+        <form onSubmit={handleSubmit} className="w-full max-w-sm p-8 rounded-2xl" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: colors.accent }}>
+              <Ticket size={18} color={colors.primary} />
+            </div>
+            <div className="leading-tight">
+              <span className="text-lg" style={{ fontWeight: 800, color: colors.ink }}>TS</span>
+              <span className="text-xs block" style={{ color: colors.inkSoft }}>Ticket System</span>
+            </div>
+          </div>
+
+          <label className="text-xs" style={{ color: colors.inkSoft }}>Felhasználónév</label>
+          <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full mt-1 mb-4 p-3 rounded-lg text-sm outline-none"
+              style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
+          />
+
+          {mode === 'register' && (
+              <>
+                <label className="text-xs" style={{ color: colors.inkSoft }}>Email</label>
+                <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full mt-1 mb-4 p-3 rounded-lg text-sm outline-none"
+                    style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
+                />
+              </>
+          )}
+
+          <label className="text-xs" style={{ color: colors.inkSoft }}>Jelszó</label>
+          <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full mt-1 mb-4 p-3 rounded-lg text-sm outline-none"
+              style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
+          />
+
+          {error && <p className="text-xs mb-4" style={{ color: colors.red }}>{error}</p>}
+
+          <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 rounded-lg text-sm"
+              style={{ background: colors.primary, color: '#fff', fontWeight: 700, opacity: loading ? 0.7 : 1 }}
+          >
+            {loading ? (mode === 'login' ? 'Belépés...' : 'Regisztráció...') : (mode === 'login' ? 'Bejelentkezés' : 'Regisztráció')}
+          </button>
+
+          <button
+              type="button"
+              onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
+              className="w-full mt-3 py-2 rounded-lg text-sm"
+              style={{ color: colors.primarySoft, fontWeight: 600 }}
+          >
+            {mode === 'login' ? 'Nincs még fiókod? Regisztrálj' : 'Van már fiókod? Jelentkezz be'}
+          </button>
+        </form>
+      </div>
+  );
+}
 
 // --- Sidebar ---------------------------------------------------------
 function Sidebar({ view, setView, filter, setFilter }) {
@@ -65,10 +190,7 @@ function Sidebar({ view, setView, filter, setFilter }) {
   );
 
   return (
-      <aside
-          className="w-64 flex-shrink-0 flex flex-col"
-          style={{ background: colors.surface, borderRight: `1px solid ${colors.border}` }}
-      >
+      <aside className="w-64 flex-shrink-0 flex flex-col" style={{ background: colors.surface, borderRight: `1px solid ${colors.border}` }}>
         <nav className="flex-grow p-3 space-y-1 mt-2">
           <button
               onClick={() => setTicketsOpen(o => !o)}
@@ -85,9 +207,10 @@ function Sidebar({ view, setView, filter, setFilter }) {
           {ticketsOpen && (
               <div className="space-y-0.5 pb-2">
                 {subItem('all', 'Összes')}
-                {subItem('open', 'Nyitott')}
-                {subItem('progress', 'Folyamatban')}
-                {subItem('closed', 'Lezárt')}
+                {subItem('OPEN', 'Nyitott')}
+                {subItem('IN_PROGRESS', 'Folyamatban')}
+                {subItem('RESOLVED', 'Megoldva')}
+                {subItem('CLOSED', 'Lezárt')}
               </div>
           )}
 
@@ -112,63 +235,34 @@ function Sidebar({ view, setView, filter, setFilter }) {
   );
 }
 
-// --- Ticket row, styled like a stub with a torn perforation ---------------
+// --- Ticket row ---------------------------------------------------------
 function TicketRow({ ticket, onOpen }) {
-  const meta = STATUS_META[ticket.status];
+  const meta = STATUS_META[ticket.status] || STATUS_META.OPEN;
   const StatusIcon = meta.icon;
 
   return (
       <button
           onClick={() => onOpen(ticket)}
           className="w-full flex items-stretch text-left rounded-xl overflow-hidden transition hover:-translate-y-0.5"
-          style={{
-            background: colors.surface,
-            border: `1px solid ${colors.border}`,
-            boxShadow: '0 1px 2px rgba(23,58,46,0.04)',
-          }}
+          style={{ background: colors.surface, border: `1px solid ${colors.border}`, boxShadow: '0 1px 2px rgba(23,58,46,0.04)' }}
       >
-        {/* stub */}
-        <div
-            className="flex flex-col items-center justify-center py-4 px-4 flex-shrink-0"
-            style={{ background: colors.primary, minWidth: '92px' }}
-        >
-        <span
-            className="text-[11px] tracking-wider"
-            style={{ fontFamily: "'JetBrains Mono', monospace", color: '#BFE0CC' }}
-        >
-          TICKET
-        </span>
-          <span
-              className="text-lg"
-              style={{ fontFamily: "'JetBrains Mono', monospace", color: '#FFFFFF', fontWeight: 600 }}
-          >
-          {ticket.id}
-        </span>
+        <div className="flex flex-col items-center justify-center py-4 px-4 flex-shrink-0" style={{ background: colors.primary, minWidth: '92px' }}>
+          <span className="text-[11px] tracking-wider" style={{ fontFamily: "'JetBrains Mono', monospace", color: '#BFE0CC' }}>TICKET</span>
+          <span className="text-lg" style={{ fontFamily: "'JetBrains Mono', monospace", color: '#FFFFFF', fontWeight: 600 }}>#{ticket.id}</span>
         </div>
 
-        {/* perforation */}
         <div className="relative flex-shrink-0" style={{ width: '1px', borderLeft: `2px dashed ${colors.border}` }}>
           <span className="absolute rounded-full" style={{ top: '-9px', left: '-9px', width: '18px', height: '18px', background: colors.bg }} />
           <span className="absolute rounded-full" style={{ bottom: '-9px', left: '-9px', width: '18px', height: '18px', background: colors.bg }} />
         </div>
 
-        {/* body */}
         <div className="flex-grow p-4 flex items-center justify-between gap-4 min-w-0">
           <div className="min-w-0">
             <h3 className="text-sm truncate" style={{ color: colors.ink, fontWeight: 600 }}>{ticket.title}</h3>
-            <p className="text-xs mt-1" style={{ color: colors.inkSoft }}>
-              {ticket.requester} · {ticket.created}
-            </p>
+            <p className="text-xs mt-1" style={{ color: colors.inkSoft }}>{ticket.authorUsername} · {formatDate(ticket.createdAt)}</p>
           </div>
-
           <div className="flex items-center gap-4 flex-shrink-0">
-          <span className="hidden sm:flex items-center gap-1 text-xs" style={{ color: colors.inkSoft }}>
-            <MessageSquare size={14} /> {ticket.comments}
-          </span>
-            <span
-                className="text-[11px] uppercase tracking-wide px-2 py-1 rounded-full flex items-center gap-1"
-                style={{ color: meta.color, background: colors.bg, fontWeight: 700 }}
-            >
+          <span className="text-[11px] uppercase tracking-wide px-2 py-1 rounded-full flex items-center gap-1" style={{ color: meta.color, background: colors.bg, fontWeight: 700 }}>
             <StatusIcon size={12} /> {meta.label}
           </span>
           </div>
@@ -177,69 +271,42 @@ function TicketRow({ ticket, onOpen }) {
   );
 }
 
-// --- Detail "page" ---------------------------------------------------------
+// --- Detail page ---------------------------------------------------------
 function TicketDetail({ ticket, onBack }) {
-  const meta = STATUS_META[ticket.status];
+  const meta = STATUS_META[ticket.status] || STATUS_META.OPEN;
+  const prio = PRIORITY_META[ticket.priority];
   return (
       <div className="max-w-3xl">
-        <button
-            onClick={onBack}
-            className="flex items-center gap-2 text-sm mb-6 transition"
-            style={{ color: colors.primarySoft, fontWeight: 600 }}
-        >
+        <button onClick={onBack} className="flex items-center gap-2 text-sm mb-6 transition" style={{ color: colors.primarySoft, fontWeight: 600 }}>
           <ArrowLeft size={16} /> Vissza a listához
         </button>
 
         <div className="rounded-2xl overflow-hidden" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
           <div className="p-6 flex items-start justify-between" style={{ borderBottom: `1px solid ${colors.border}` }}>
             <div>
-            <span
-                className="text-xs tracking-wider"
-                style={{ fontFamily: "'JetBrains Mono', monospace", color: colors.primarySoft, fontWeight: 600 }}
-            >
-              {ticket.id}
-            </span>
+              <span className="text-xs tracking-wider" style={{ fontFamily: "'JetBrains Mono', monospace", color: colors.primarySoft, fontWeight: 600 }}>#{ticket.id}</span>
               <h2 className="text-2xl mt-1" style={{ color: colors.ink, fontWeight: 800 }}>{ticket.title}</h2>
               <p className="text-sm mt-2" style={{ color: colors.inkSoft }}>
-                Beküldte: {ticket.requester} · {ticket.created}
+                Beküldte: {ticket.authorUsername} · {formatDate(ticket.createdAt)}
+                {ticket.assigneeUsername && <> · Felelős: {ticket.assigneeUsername}</>}
               </p>
             </div>
-            <span
-                className="text-xs uppercase tracking-wide px-3 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
-                style={{ color: meta.color, background: colors.bg, fontWeight: 700 }}
-            >
+            <span className="text-xs uppercase tracking-wide px-3 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0" style={{ color: meta.color, background: colors.bg, fontWeight: 700 }}>
             <meta.icon size={13} /> {meta.label}
           </span>
           </div>
 
           <div className="p-6 space-y-4">
-            <div className="flex gap-8 text-sm">
-              <div>
-                <p style={{ color: colors.inkSoft }}>Prioritás</p>
-                <p className="mt-1" style={{ color: PRIORITY_META[ticket.priority], fontWeight: 700 }}>
-                  {ticket.priority[0].toUpperCase() + ticket.priority.slice(1)}
-                </p>
-              </div>
-              <div>
-                <p style={{ color: colors.inkSoft }}>Hozzászólások</p>
-                <p className="mt-1" style={{ color: colors.ink, fontWeight: 700 }}>{ticket.comments}</p>
-              </div>
+            <div>
+              <p style={{ color: colors.inkSoft }} className="text-sm">Prioritás</p>
+              <p className="mt-1" style={{ color: prio ? prio.color : colors.ink, fontWeight: 700 }}>
+                {prio ? prio.label : '—'}
+              </p>
             </div>
 
             <div>
               <p className="text-sm mb-1" style={{ color: colors.inkSoft }}>Leírás</p>
-              <p className="text-sm leading-relaxed" style={{ color: colors.ink }}>
-                Ide kerülne a jegy teljes leírása, amit az API-ból töltünk be a részletek megnyitásakor.
-              </p>
-            </div>
-
-            <div className="flex gap-3 pt-2">
-              <button className="px-4 py-2 rounded-lg text-sm" style={{ background: colors.primary, color: '#fff', fontWeight: 700 }}>
-                Állapot módosítása
-              </button>
-              <button className="px-4 py-2 rounded-lg text-sm" style={{ background: colors.bg, color: colors.ink, fontWeight: 600 }}>
-                Hozzászólás írása
-              </button>
+              <p className="text-sm leading-relaxed" style={{ color: colors.ink }}>{ticket.description || '—'}</p>
             </div>
           </div>
         </div>
@@ -247,15 +314,38 @@ function TicketDetail({ ticket, onBack }) {
   );
 }
 
-// --- New ticket "page" ---------------------------------------------------------
-function NewTicket({ onBack }) {
+// --- New ticket page ---------------------------------------------------------
+function NewTicket({ onBack, onCreated }) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState('MEDIUM');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async () => {
+    setError('');
+    setSaving(true);
+    try {
+      // FONTOS: a TicketCreateRequest jelenleg egy `authorId` mezőt is vár,
+      // amit a kliensnek NEM kellene küldenie — a backendnek a bejelentkezett
+      // felhasználót (SecurityContext) kellene szerzőnek beállítania.
+      // Amíg ez nincs javítva a TicketController/Service oldalon, ez a hívás
+      // 400-as hibát fog adni hiányzó authorId miatt.
+      await apiFetch('/api/tickets', {
+        method: 'POST',
+        body: JSON.stringify({ title, description, priority }),
+      });
+      onCreated();
+    } catch (err) {
+      setError(err.message || 'Nem sikerült létrehozni a jegyet');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
       <div className="max-w-2xl">
-        <button
-            onClick={onBack}
-            className="flex items-center gap-2 text-sm mb-6 transition"
-            style={{ color: colors.primarySoft, fontWeight: 600 }}
-        >
+        <button onClick={onBack} className="flex items-center gap-2 text-sm mb-6 transition" style={{ color: colors.primarySoft, fontWeight: 600 }}>
           <ArrowLeft size={16} /> Vissza a listához
         </button>
         <div className="rounded-2xl p-6" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
@@ -264,6 +354,8 @@ function NewTicket({ onBack }) {
             <div>
               <label className="text-xs" style={{ color: colors.inkSoft }}>Tárgy</label>
               <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
                   className="w-full mt-1 p-3 rounded-lg text-sm outline-none"
                   style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
                   placeholder="Röviden, mi a probléma?"
@@ -273,13 +365,34 @@ function NewTicket({ onBack }) {
               <label className="text-xs" style={{ color: colors.inkSoft }}>Leírás</label>
               <textarea
                   rows={5}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
                   className="w-full mt-1 p-3 rounded-lg text-sm outline-none resize-none"
                   style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
                   placeholder="Írd le részletesen, mit tapasztaltál..."
               />
             </div>
-            <button className="px-5 py-2.5 rounded-lg text-sm" style={{ background: colors.primary, color: '#fff', fontWeight: 700 }}>
-              Jegy beküldése
+            <div>
+              <label className="text-xs" style={{ color: colors.inkSoft }}>Prioritás</label>
+              <select
+                  value={priority}
+                  onChange={(e) => setPriority(e.target.value)}
+                  className="w-full mt-1 p-3 rounded-lg text-sm outline-none"
+                  style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
+              >
+                {Object.entries(PRIORITY_META).map(([key, meta]) => (
+                    <option key={key} value={key}>{meta.label}</option>
+                ))}
+              </select>
+            </div>
+            {error && <p className="text-xs" style={{ color: colors.red }}>{error}</p>}
+            <button
+                onClick={handleSubmit}
+                disabled={saving}
+                className="px-5 py-2.5 rounded-lg text-sm"
+                style={{ background: colors.primary, color: '#fff', fontWeight: 700, opacity: saving ? 0.7 : 1 }}
+            >
+              {saving ? 'Küldés...' : 'Jegy beküldése'}
             </button>
           </div>
         </div>
@@ -289,28 +402,55 @@ function NewTicket({ onBack }) {
 
 // --- App ---------------------------------------------------------
 export default function App() {
-  const [view, setView] = useState('list'); // 'list' | 'detail' | 'new'
+  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [view, setView] = useState('list');
   const [filter, setFilter] = useState('all');
   const [selected, setSelected] = useState(null);
+  const [tickets, setTickets] = useState([]);
+  const [loadError, setLoadError] = useState('');
 
-  const filtered = filter === 'all' ? TICKETS : TICKETS.filter(t => t.status === filter);
-  const filterLabel = { all: 'Összes jegy', open: 'Nyitott jegyek', progress: 'Folyamatban lévő jegyek', closed: 'Lezárt jegyek' }[filter];
+  const loadTickets = () => {
+    apiFetch('/api/tickets')
+        .then(setTickets)
+        .catch((err) => {
+          if (err.message === 'UNAUTHORIZED') {
+            setToken(null);
+          } else {
+            setLoadError('Nem sikerült betölteni a jegyeket.');
+          }
+        });
+  };
+
+  useEffect(() => {
+    if (token) loadTickets();
+  }, [token]);
+
+  if (!token) {
+    return <LoginForm onLogin={() => setToken(localStorage.getItem('token'))} />;
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    setToken(null);
+  };
+
+  const filtered = filter === 'all' ? tickets : tickets.filter(t => t.status === filter);
+  const filterLabel = {
+    all: 'Összes jegy',
+    OPEN: 'Nyitott jegyek',
+    IN_PROGRESS: 'Folyamatban lévő jegyek',
+    RESOLVED: 'Megoldott jegyek',
+    CLOSED: 'Lezárt jegyek',
+  }[filter];
 
   return (
       <div className="min-h-screen flex flex-col" style={{ background: colors.bg }}>
         <style>{FONT_IMPORT}</style>
         <div style={{ fontFamily: "'Manrope', sans-serif" }} className="flex flex-col min-h-screen">
 
-          {/* Top bar */}
-          <header
-              className="w-full flex items-center justify-between px-6 py-4 flex-shrink-0"
-              style={{ background: colors.primary }}
-          >
+          <header className="w-full flex items-center justify-between px-6 py-4 flex-shrink-0" style={{ background: colors.primary }}>
             <div className="flex items-center gap-3">
-              <div
-                  className="w-9 h-9 rounded-lg flex items-center justify-center"
-                  style={{ background: colors.accent }}
-              >
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: colors.accent }}>
                 <Ticket size={18} color={colors.primary} />
               </div>
               <div className="leading-tight">
@@ -318,11 +458,13 @@ export default function App() {
                 <span className="text-xs block" style={{ color: '#BFE0CC' }}>Ticket System</span>
               </div>
             </div>
-            <div
-                className="w-9 h-9 rounded-full flex items-center justify-center text-sm flex-shrink-0"
-                style={{ background: '#BFE0CC', color: colors.primary, fontWeight: 700 }}
-            >
-              SD
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm flex-shrink-0" style={{ background: '#BFE0CC', color: colors.primary, fontWeight: 700 }}>
+                SD
+              </div>
+              <button onClick={handleLogout} title="Kijelentkezés" style={{ color: '#BFE0CC' }}>
+                <LogOut size={18} />
+              </button>
             </div>
           </header>
 
@@ -333,11 +475,12 @@ export default function App() {
               {view === 'list' && (
                   <>
                     <h1 className="text-2xl mb-6" style={{ color: colors.ink, fontWeight: 800 }}>{filterLabel}</h1>
+                    {loadError && <p className="text-sm mb-4" style={{ color: colors.red }}>{loadError}</p>}
                     <div className="space-y-3 max-w-4xl">
                       {filtered.map(t => (
                           <TicketRow key={t.id} ticket={t} onOpen={(t) => { setSelected(t); setView('detail'); }} />
                       ))}
-                      {filtered.length === 0 && (
+                      {filtered.length === 0 && !loadError && (
                           <p className="text-sm" style={{ color: colors.inkSoft }}>Nincs ilyen státuszú jegy.</p>
                       )}
                     </div>
@@ -349,7 +492,7 @@ export default function App() {
               )}
 
               {view === 'new' && (
-                  <NewTicket onBack={() => setView('list')} />
+                  <NewTicket onBack={() => setView('list')} onCreated={() => { loadTickets(); setView('list'); }} />
               )}
             </main>
           </div>
