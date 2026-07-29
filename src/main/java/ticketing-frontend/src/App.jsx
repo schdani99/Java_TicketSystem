@@ -28,8 +28,6 @@ async function apiFetch(path, options = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-// A JwtService a "subject" claimbe teszi a usernevet (subject(userDetails.getUsername())),
-// ezt olvassuk ki itt kliens oldalon, csak megjelenítés céljából (nincs aláírás-ellenőrzés).
 function getUsernameFromToken(token) {
   if (!token) return null;
   try {
@@ -38,6 +36,17 @@ function getUsernameFromToken(token) {
     return decoded.sub || null;
   } catch {
     return null;
+  }
+}
+
+function getRoleFromToken(token) {
+  if (!token) return null;
+  try {
+    const payload = token.split('.')[1];
+    const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return decoded.role || 'USER';
+  } catch {
+    return 'USER';
   }
 }
 
@@ -74,12 +83,12 @@ const PRIORITY_META = {
 
 function formatDate(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('hu-HU', { year: 'numeric', month: 'short', day: 'numeric' });
+  return new Date(iso).toLocaleDateString('hu-HU', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 // --- Login ---------------------------------------------------------
 function LoginForm({ onLogin }) {
-  const [mode, setMode] = useState('login'); // 'login' | 'register'
+  const [mode, setMode] = useState('login');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -92,8 +101,6 @@ function LoginForm({ onLogin }) {
     setLoading(true);
     try {
       const path = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-      // Regisztrációnál szándékosan fix "USER" szerepkört küldünk —
-      // a role mezőt sosem szabad a kliensre bízni egy nyilvános formon.
       const body = mode === 'login'
           ? { username, password }
           : { username, email, password, role: 'USER' };
@@ -285,42 +292,200 @@ function TicketRow({ ticket, onOpen }) {
 }
 
 // --- Detail page ---------------------------------------------------------
-function TicketDetail({ ticket, onBack }) {
+function TicketDetail({ ticket, onBack, userRole, username }) {
   const meta = STATUS_META[ticket.status] || STATUS_META.OPEN;
   const prio = PRIORITY_META[ticket.priority];
+
+  const [comments, setComments] = useState([]);
+  const [newComment, setNewComment] = useState('');
+  const [commenting, setCommenting] = useState(false);
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [selectedStatus, setSelectedStatus] = useState(ticket.status); // Új állapot a dropdownhoz
+  const [currentStatus, setCurrentStatus] = useState(ticket.status);
+  const [assigning, setAssigning] = useState(false);
+
+  useEffect(() => {
+    apiFetch(`/api/tickets/${ticket.id}/comments`)
+        .then(setComments)
+        .catch(err => console.error("Kommentek hiba:", err));
+  }, [ticket.id]);
+
+  const handleAddComment = async () => {
+    if (!newComment.trim() && currentStatus === selectedStatus) return; // Ne küldjön üres kérést
+
+    setCommenting(true);
+    try {
+      let commentText = newComment;
+
+      // 1. Állapot módosítás (Ha volt változás és a user Support/Admin)
+      if (currentStatus !== selectedStatus && canChangeStatus) {
+        setUpdatingStatus(true);
+        try {
+          await apiFetch(`/api/tickets/${ticket.id}/status?status=${selectedStatus}`, { method: 'PUT' });
+          setCurrentStatus(selectedStatus);
+          ticket.status = selectedStatus; // Update local ticket prop temporarily
+
+          // Rendszerüzenet hozzáfűzése a kommenthez
+          const systemMessage = `[Rendszerüzenet: Állapot módosítva erre: ${STATUS_META[selectedStatus].label}]`;
+          commentText = commentText ? `${commentText}\n\n${systemMessage}` : systemMessage;
+        } catch (err) {
+          alert("Hiba a státusz módosításakor: " + (err.error || err.message));
+          setUpdatingStatus(false);
+          setCommenting(false);
+          return; // Álljunk meg, ha a státuszváltás hiba volt
+        }
+        setUpdatingStatus(false);
+      }
+
+      // 2. Komment beküldése
+      if (commentText.trim()) {
+        const res = await apiFetch(`/api/tickets/${ticket.id}/comments`, {
+          method: 'POST',
+          body: JSON.stringify({ content: commentText })
+        });
+        setComments([...comments, res]);
+      }
+      setNewComment('');
+    } catch (err) {
+      alert("Hiba a komment elküldésekor: " + err.message);
+    } finally {
+      setCommenting(false);
+    }
+  };
+
+
+  const handleAssign = async () => {
+    setAssigning(true);
+    try {
+      const updatedTicket = await apiFetch(`/api/tickets/${ticket.id}/assign`, { method: 'PUT' });
+      ticket.assigneeUsername = updatedTicket.assigneeUsername;
+      ticket.status = updatedTicket.status;
+      setCurrentStatus(updatedTicket.status);
+      setSelectedStatus(updatedTicket.status); // Frissítsük a dropdown-t is
+
+      // Adjunk hozzá egy rendszerkommentet a kiosztásról is (Opcionális, de hasznos)
+      const res = await apiFetch(`/api/tickets/${ticket.id}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ content: `[Rendszerüzenet: ${username} magára osztotta a jegyet.]` })
+      });
+      setComments(prev => [...prev, res]);
+
+    } catch (err) {
+      alert("Hiba a kiosztáskor: " + (err.error || err.message));
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const canChangeStatus = userRole === 'ADMIN' || userRole === 'SUPPORT';
+  const displayMeta = STATUS_META[currentStatus] || STATUS_META.OPEN;
+
   return (
-      <div className="max-w-3xl">
+      <div className="max-w-3xl pb-10">
         <button onClick={onBack} className="flex items-center gap-2 text-sm mb-6 transition" style={{ color: colors.primarySoft, fontWeight: 600 }}>
           <ArrowLeft size={16} /> Vissza a listához
         </button>
 
-        <div className="rounded-2xl overflow-hidden" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
+        <div className="rounded-2xl overflow-hidden mb-6" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
           <div className="p-6 flex items-start justify-between" style={{ borderBottom: `1px solid ${colors.border}` }}>
             <div>
               <span className="text-xs tracking-wider" style={{ fontFamily: "'JetBrains Mono', monospace", color: colors.primarySoft, fontWeight: 600 }}>#{ticket.id}</span>
               <h2 className="text-2xl mt-1" style={{ color: colors.ink, fontWeight: 800 }}>{ticket.title}</h2>
-              <p className="text-sm mt-2" style={{ color: colors.inkSoft }}>
+              <p className="text-sm mt-2 flex items-center gap-2" style={{ color: colors.inkSoft }}>
                 Beküldte: {ticket.authorUsername} · {formatDate(ticket.createdAt)}
-                {ticket.assigneeUsername && <> · Felelős: {ticket.assigneeUsername}</>}
+
+                {ticket.assigneeUsername ? (
+                    <> · Felelős: <strong style={{color: colors.primary}}>{ticket.assigneeUsername}</strong></>
+                ) : (
+                    canChangeStatus && (
+                        <button
+                            onClick={handleAssign}
+                            disabled={assigning}
+                            className="ml-2 px-2 py-0.5 rounded text-xs font-bold transition"
+                            style={{ background: colors.accent, color: '#fff', opacity: assigning ? 0.5 : 1 }}
+                        >
+                          {assigning ? 'Kiosztás...' : 'Magamra osztom'}
+                        </button>
+                    )
+                )}
               </p>
             </div>
-            <span className="text-xs uppercase tracking-wide px-3 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0" style={{ color: meta.color, background: colors.bg, fontWeight: 700 }}>
-            <meta.icon size={13} /> {meta.label}
+            <span className="text-xs uppercase tracking-wide px-3 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0" style={{ color: displayMeta.color, background: colors.bg, fontWeight: 700 }}>
+            <displayMeta.icon size={13} /> {displayMeta.label}
           </span>
           </div>
 
-          <div className="p-6 space-y-4">
-            <div>
-              <p style={{ color: colors.inkSoft }} className="text-sm">Prioritás</p>
-              <p className="mt-1" style={{ color: prio ? prio.color : colors.ink, fontWeight: 700 }}>
-                {prio ? prio.label : '—'}
-              </p>
+          <div className="p-6 space-y-6">
+            <div className="flex gap-8 text-sm">
+              <div>
+                <p style={{ color: colors.inkSoft }} className="text-sm">Prioritás</p>
+                <p className="mt-1" style={{ color: prio ? prio.color : colors.ink, fontWeight: 700 }}>
+                  {prio ? prio.label : '—'}
+                </p>
+              </div>
             </div>
 
             <div>
               <p className="text-sm mb-1" style={{ color: colors.inkSoft }}>Leírás</p>
-              <p className="text-sm leading-relaxed" style={{ color: colors.ink }}>{ticket.description || '—'}</p>
+              {/* FONTOS: A white-space: pre-wrap miatt a sortörések megmaradnak */}
+              <p className="text-sm leading-relaxed" style={{ color: colors.ink, whiteSpace: 'pre-wrap' }}>{ticket.description || '—'}</p>
             </div>
+          </div>
+        </div>
+
+        {/* Comments Section */}
+        <div className="rounded-2xl p-6" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
+          <h3 className="text-lg mb-4" style={{ color: colors.ink, fontWeight: 800 }}>Hozzászólások ({comments.length})</h3>
+
+          <div className="space-y-4 mb-6">
+            {comments.map(c => (
+                <div key={c.id} className="p-4 rounded-lg" style={{ background: colors.bg }}>
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-sm font-bold" style={{ color: colors.primary }}>{c.authorUsername}</span>
+                    <span className="text-xs" style={{ color: colors.inkSoft }}>{formatDate(c.createdAt)}</span>
+                  </div>
+                  {/* FONTOS: whiteSpace: 'pre-wrap' a formázások (sortörés, behúzás) megőrzéséhez */}
+                  <p className="text-sm" style={{ color: colors.ink, whiteSpace: 'pre-wrap' }}>{c.content}</p>
+                </div>
+            ))}
+            {comments.length === 0 && <p className="text-sm italic" style={{ color: colors.inkSoft }}>Még nincsenek hozzászólások.</p>}
+          </div>
+
+          <div className="pt-4 border-t" style={{ borderColor: colors.border }}>
+            {/* Státuszválasztó Dropdown (Csak ha módosíthatja) */}
+            {canChangeStatus && (
+                <div className="mb-4">
+                  <label className="text-xs font-bold block mb-1" style={{ color: colors.inkSoft }}>Jegy státusza:</label>
+                  <select
+                      value={selectedStatus}
+                      onChange={(e) => setSelectedStatus(e.target.value)}
+                      className="p-2 rounded text-sm outline-none w-full md:w-auto"
+                      style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
+                  >
+                    {Object.keys(STATUS_META).map(key => (
+                        <option key={key} value={key}>{STATUS_META[key].label}</option>
+                    ))}
+                  </select>
+                </div>
+            )}
+
+            <textarea
+                rows={4}
+                value={newComment}
+                onChange={e => setNewComment(e.target.value)}
+                className="w-full p-3 rounded-lg text-sm outline-none resize-none mb-2"
+                style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
+                placeholder={canChangeStatus && currentStatus !== selectedStatus ? "Írj egy hozzászólást a státuszváltáshoz (opcionális)..." : "Írj egy hozzászólást..."}
+            />
+
+            <button
+                onClick={handleAddComment}
+                disabled={commenting || (!newComment.trim() && currentStatus === selectedStatus)}
+                className="px-4 py-2 rounded-lg text-sm transition"
+                style={{ background: colors.primary, color: '#fff', fontWeight: 700, opacity: (commenting || (!newComment.trim() && currentStatus === selectedStatus)) ? 0.6 : 1 }}
+            >
+              {commenting || updatingStatus ? 'Küldés...' : (currentStatus !== selectedStatus ? 'Módosítás és Küldés' : 'Hozzászólás küldése')}
+            </button>
           </div>
         </div>
       </div>
@@ -339,13 +504,9 @@ function NewTicket({ onBack, onCreated }) {
     setError('');
     setSaving(true);
     try {
-      // FONTOS: a TicketCreateRequest jelenleg egy `authorId` mezőt is vár,
-      // amit a kliensnek NEM kellene küldenie — a backendnek a bejelentkezett
-      // felhasználót (SecurityContext) kellene szerzőnek beállítania.
-      // Amíg ez nincs javítva a TicketController/Service oldalon, ez a hívás
-      // 400-as hibát fog adni hiányzó authorId miatt.
       await apiFetch('/api/tickets', {
         method: 'POST',
+        // FONTOS: a backendből kiszedtük az authorId-t, mert a tokenből olvassa ki!
         body: JSON.stringify({ title, description, priority }),
       });
       onCreated();
@@ -448,6 +609,7 @@ export default function App() {
   };
 
   const username = getUsernameFromToken(token);
+  const userRole = getRoleFromToken(token);
   const avatarInitials = username ? username.slice(0, 2).toUpperCase() : '?';
 
   const filtered = filter === 'all' ? tickets : tickets.filter(t => t.status === filter);
@@ -478,7 +640,7 @@ export default function App() {
               <div
                   className="w-9 h-9 rounded-full flex items-center justify-center text-sm flex-shrink-0"
                   style={{ background: '#BFE0CC', color: colors.primary, fontWeight: 700 }}
-                  title={username || ''}
+                  title={`${username || ''} (${userRole})`}
               >
                 {avatarInitials}
               </div>
@@ -508,7 +670,7 @@ export default function App() {
               )}
 
               {view === 'detail' && selected && (
-                  <TicketDetail ticket={selected} onBack={() => setView('list')} />
+                  <TicketDetail ticket={selected} onBack={() => { setView('list'); loadTickets(); }} userRole={userRole} username={username} token={token} />
               )}
 
               {view === 'new' && (

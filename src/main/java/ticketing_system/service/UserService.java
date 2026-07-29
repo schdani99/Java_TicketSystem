@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
+import ticketing_system.model.Role;
 
 @Service
 public class UserService {
@@ -39,5 +40,11 @@ public class UserService {
         user.setPassword(passwordEncoder.encode(user.getPassword()));
 
         return userRepository.save(user);
+    }
+    public List<User> searchStaff(String query) {
+        return userRepository.findByUsernameContainingIgnoreCaseAndRoleIn(
+                query,
+                List.of(Role.ADMIN, Role.SUPPORT)
+        );
     }
 }

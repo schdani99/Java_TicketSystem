@@ -6,7 +6,7 @@ import ticketing_system.service.UserService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
+import org.springframework.security.access.prepost.PreAuthorize;
 import java.util.List;
 
 @RestController // Jelzi a Springnek, hogy ez REST API végpontokat tartalmaz (JSON-t ad vissza)
@@ -44,5 +44,13 @@ public class UserController {
             // Ha foglalt a név/email, 400 Bad Requestet adunk (Egyelőre a hibakezelés primitív)
             return ResponseEntity.badRequest().build();
         }
+    }
+
+    @GetMapping("/search-staff")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPPORT')")
+    public List<UserDto> searchStaff(@RequestParam String query) {
+        return userService.searchStaff(query).stream()
+                .map(user -> new UserDto(user.getId(), user.getUsername(), user.getEmail(), user.getRole()))
+                .toList();
     }
 }
