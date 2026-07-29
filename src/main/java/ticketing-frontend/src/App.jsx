@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Ticket, ChevronDown, ChevronRight, PlusCircle, Inbox,
-  CheckCircle2, Circle, ArrowLeft, Clock, LogOut, Search, User as UserIcon
+  CheckCircle2, Circle, ArrowLeft, Clock, LogOut, Search, Users
 } from 'lucide-react';
 
 // --- API ---------------------------------------------------------
@@ -191,7 +191,7 @@ function LoginForm({ onLogin }) {
 }
 
 // --- Sidebar ---------------------------------------------------------
-function Sidebar({ view, setView, filter, setFilter }) {
+function Sidebar({ view, setView, filter, setFilter, userRole }) {
   const [ticketsOpen, setTicketsOpen] = useState(true);
 
   const subItem = (key, label) => (
@@ -245,6 +245,22 @@ function Sidebar({ view, setView, filter, setFilter }) {
             <PlusCircle size={18} />
             Jegy feladása
           </button>
+
+          {/* Csak ADMIN láthatja az adminisztrációs menüt */}
+          {userRole === 'ADMIN' && (
+              <button
+                  onClick={() => setView('admin')}
+                  className="w-full flex items-center gap-3 p-3 rounded-lg transition mt-2"
+                  style={{
+                    color: view === 'admin' ? '#FFFFFF' : colors.inkSoft,
+                    background: view === 'admin' ? colors.primarySoft : 'transparent',
+                    fontWeight: 700,
+                  }}
+              >
+                <Users size={18} />
+                Felhasználók (Admin)
+              </button>
+          )}
         </nav>
 
         <div className="p-4 text-xs" style={{ color: colors.inkSoft, borderTop: `1px solid ${colors.border}` }}>
@@ -643,6 +659,162 @@ function NewTicket({ onBack, onCreated }) {
   );
 }
 
+// --- Admin Panel ---------------------------------------------------------
+function AdminPanel({ onBack, currentUsername }) { // <-- JAVÍTÁS: Bekérjük az aktuális bejelentkezett nevet
+  const [users, setUsers] = useState([]);
+  const [loadError, setLoadError] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [pendingRoles, setPendingRoles] = useState({});
+  const [savingId, setSavingId] = useState(null);
+
+  const loadUsers = async () => {
+    try {
+      const data = await apiFetch('/api/admin/users');
+      setUsers(data);
+    } catch (err) {
+      setLoadError('Nem sikerült betölteni a felhasználókat: ' + err.message);
+    }
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  const handleSaveRole = async (userId) => {
+    setSavingId(userId);
+    try {
+      await apiFetch(`/api/admin/users/${userId}/role?role=${pendingRoles[userId]}`, { method: 'PUT' });
+      // Sikeres mentés után töröljük a függőben lévő állapotot
+      setPendingRoles(prev => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      loadUsers(); // Lista frissítése
+    } catch (err) {
+      alert('Hiba a jogosultság módosításakor: ' + err.message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const cancelRoleChange = (userId) => {
+    setPendingRoles(prev => {
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
+  };
+
+  const filteredUsers = users.filter(u =>
+      u.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      u.email.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+      <div className="max-w-4xl pb-10">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+          <h2 className="text-2xl" style={{ color: colors.ink, fontWeight: 800 }}>Felhasználók kezelése</h2>
+
+          {/* Keresőmező */}
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-2.5" size={16} color={colors.inkSoft} />
+            <input
+                type="text"
+                placeholder="Keresés (név, email)..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-3 py-2 rounded-lg text-sm outline-none transition"
+                style={{ border: `1px solid ${colors.border}`, background: colors.surface }}
+            />
+          </div>
+        </div>
+
+        {loadError && <p className="text-sm mb-4" style={{ color: colors.red }}>{loadError}</p>}
+
+        <div className="rounded-2xl overflow-x-auto" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
+          <table className="w-full text-left text-sm whitespace-nowrap">
+            <thead>
+            <tr style={{ background: colors.bg, color: colors.inkSoft, borderBottom: `1px solid ${colors.border}` }}>
+              <th className="p-4 font-bold">ID</th>
+              <th className="p-4 font-bold">Felhasználónév</th>
+              <th className="p-4 font-bold">Email</th>
+              <th className="p-4 font-bold">Szerepkör (Role)</th>
+              <th className="p-4 font-bold">Műveletek</th>
+            </tr>
+            </thead>
+            <tbody>
+            {filteredUsers.map(u => {
+              const currentDisplayRole = pendingRoles[u.id] || u.role;
+              const isChanged = pendingRoles[u.id] && pendingRoles[u.id] !== u.role;
+              const isSaving = savingId === u.id;
+              const isCurrentUser = u.username === currentUsername; // <-- ÚJ: Ellenőrizzük, hogy ő-e az aktuális felhasználó
+
+              return (
+                  <tr key={u.id} style={{ borderBottom: `1px solid ${colors.border}` }}>
+                    <td className="p-4" style={{ color: colors.inkSoft }}>#{u.id}</td>
+                    <td className="p-4" style={{ color: colors.ink, fontWeight: 600 }}>
+                      {u.username}
+                      {isCurrentUser && <span className="ml-2 text-[10px] uppercase bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-bold">Te</span>}
+                    </td>
+                    <td className="p-4" style={{ color: colors.inkSoft }}>{u.email}</td>
+                    <td className="p-4">
+                      <select
+                          value={currentDisplayRole}
+                          onChange={(e) => setPendingRoles(prev => ({ ...prev, [u.id]: e.target.value }))}
+                          disabled={isSaving || isCurrentUser} // <-- ÚJ: Blokkoljuk, ha saját magát akarja módosítani
+                          className="p-2 rounded border outline-none text-xs font-bold transition-colors"
+                          style={{
+                            borderColor: isChanged ? colors.amber : colors.border,
+                            background: currentDisplayRole === 'ADMIN' ? '#FEE2E2' : currentDisplayRole === 'SUPPORT' ? '#E0F2FE' : colors.bg,
+                            color: currentDisplayRole === 'ADMIN' ? colors.red : currentDisplayRole === 'SUPPORT' ? colors.amber : colors.ink,
+                            opacity: isCurrentUser ? 0.6 : 1, // Kiszürkítjük egy picit
+                            cursor: isCurrentUser ? 'not-allowed' : 'pointer'
+                          }}
+                      >
+                        <option value="USER">USER (Alap)</option>
+                        <option value="SUPPORT">SUPPORT (Támogató)</option>
+                        <option value="ADMIN">ADMIN (Rendszergazda)</option>
+                      </select>
+                    </td>
+                    <td className="p-4" style={{ minWidth: '140px' }}>
+                      {/* Mentés és Mégse gombok csak módosítás esetén jelennek meg */}
+                      {isChanged ? (
+                          <div className="flex gap-2">
+                            <button
+                                onClick={() => handleSaveRole(u.id)}
+                                disabled={isSaving}
+                                className="px-3 py-1.5 rounded text-xs font-bold text-white transition-opacity"
+                                style={{ background: colors.primary, opacity: isSaving ? 0.5 : 1 }}
+                            >
+                              {isSaving ? '...' : 'Mentés'}
+                            </button>
+                            <button
+                                onClick={() => cancelRoleChange(u.id)}
+                                disabled={isSaving}
+                                className="px-3 py-1.5 rounded text-xs font-bold transition-opacity"
+                                style={{ background: '#FEE2E2', color: colors.red, opacity: isSaving ? 0.5 : 1 }}
+                            >
+                              X
+                            </button>
+                          </div>
+                      ) : (
+                          <span className="text-xs italic" style={{ color: colors.border }}>-</span>
+                      )}
+                    </td>
+                  </tr>
+              );
+            })}
+            {filteredUsers.length === 0 && !loadError && (
+                <tr><td colSpan="5" className="p-4 text-center italic text-gray-500">Nincs találat erre a keresésre.</td></tr>
+            )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+  );
+}
+
 // --- App ---------------------------------------------------------
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token'));
@@ -722,7 +894,7 @@ export default function App() {
           </header>
 
           <div className="flex flex-grow min-h-0">
-            <Sidebar view={view} setView={setView} filter={filter} setFilter={setFilter} />
+            <Sidebar view={view} setView={setView} filter={filter} setFilter={setFilter} userRole={userRole} />
 
             <main className="flex-grow p-8 overflow-auto">
               {view === 'list' && (
@@ -752,6 +924,12 @@ export default function App() {
 
               {view === 'new' && (
                   <NewTicket onBack={() => setView('list')} onCreated={() => { loadTickets(); setView('list'); }} />
+              )}
+
+              {}
+              {view === 'admin' && userRole === 'ADMIN' && (
+                  <AdminPanel onBack={() => setView('list')} currentUsername={username} />
+                  // <-- JAVÍTÁS: Átadjuk az AdminPanel-nek, hogy ki van épp belépve (currentUsername={username})
               )}
             </main>
           </div>

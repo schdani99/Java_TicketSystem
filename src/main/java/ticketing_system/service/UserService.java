@@ -41,6 +41,14 @@ public class UserService {
 
         return userRepository.save(user);
     }
+    public User updateUserRole(Long userId, Role newRole) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Felhasználó nem található ezzel az ID-val: " + userId));
+
+        user.setRole(newRole);
+        return userRepository.save(user); // A JPA frissíti a meglévő rekordot
+    }
+
     public List<User> searchStaff(String query) {
         return userRepository.findByUsernameContainingIgnoreCaseAndRoleIn(
                 query,
