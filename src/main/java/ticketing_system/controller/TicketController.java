@@ -12,7 +12,7 @@ import ticketing_system.service.TicketService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
+import ticketing_system.model.Role;
 import java.util.List;
 
 @RestController
@@ -64,11 +64,20 @@ public class TicketController {
     // 4. Jegy kiosztása - CSAK ADMIN ÉS SUPPORT JOGGAL!
     @PutMapping("/{ticketId}/assign")
     @PreAuthorize("hasAnyRole('ADMIN', 'SUPPORT')")
-    public ResponseEntity<TicketResponse> assignTicket(@PathVariable Long ticketId, Authentication authentication) {
-        User currentUser = userRepository.findByUsername(authentication.getName())
-                .orElseThrow(() -> new IllegalArgumentException("User nem található"));
+    public ResponseEntity<TicketResponse> assignTicket(
+            @PathVariable Long ticketId,
+            @RequestParam Long assigneeId) {
 
-        Ticket updatedTicket = ticketService.assignTicket(ticketId, currentUser);
+        User assignee = userRepository.findById(assigneeId)
+                .orElseThrow(() -> new IllegalArgumentException("A kiválasztott felhasználó nem található"));
+
+        // Védelmi réteg: még ha valaki a keresőt megkerülve, közvetlen API-hívással
+        // próbálna egy sima USER-t felelősként beállítani, azt is elutasítjuk.
+        if (assignee.getRole() != Role.ADMIN && assignee.getRole() != Role.SUPPORT) {
+            throw new IllegalArgumentException("Csak ADMIN vagy SUPPORT szerepkörű felhasználó lehet felelős");
+        }
+
+        Ticket updatedTicket = ticketService.assignTicket(ticketId, assignee);
         return ResponseEntity.ok(mapToResponse(updatedTicket));
     }
 
