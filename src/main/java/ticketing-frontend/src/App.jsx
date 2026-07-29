@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Ticket, ChevronDown, ChevronRight, PlusCircle, Inbox,
-  CheckCircle2, Circle, ArrowLeft, Clock, LogOut
+  CheckCircle2, Circle, ArrowLeft, Clock, LogOut, Search, User as UserIcon
 } from 'lucide-react';
 
 // --- API ---------------------------------------------------------
@@ -66,7 +66,6 @@ const colors = {
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');`;
 
-// Ticketing_system.model.Status / Priority pontos értékei alapján
 const STATUS_META = {
   OPEN: { label: 'Nyitott', icon: Circle, color: colors.accent },
   IN_PROGRESS: { label: 'Folyamatban', icon: Clock, color: colors.amber },
@@ -263,7 +262,7 @@ function TicketRow({ ticket, onOpen }) {
   return (
       <button
           onClick={() => onOpen(ticket)}
-          className="w-full flex items-stretch text-left rounded-xl overflow-hidden transition hover:-translate-y-0.5"
+          className="w-full flex items-stretch text-left rounded-xl overflow-hidden transition hover:-translate-y-0.5 mb-3"
           style={{ background: colors.surface, border: `1px solid ${colors.border}`, boxShadow: '0 1px 2px rgba(23,58,46,0.04)' }}
       >
         <div className="flex flex-col items-center justify-center py-4 px-4 flex-shrink-0" style={{ background: colors.primary, minWidth: '92px' }}>
@@ -291,94 +290,114 @@ function TicketRow({ ticket, onOpen }) {
   );
 }
 
-// --- Detail page ---------------------------------------------------------
-function TicketDetail({ ticket, onBack, userRole, username }) {
+// --- Detail page (Combined Action Bar) -----------------------------------
+function TicketDetail({ ticket, onBack, userRole, username, onUpdate }) {
   const meta = STATUS_META[ticket.status] || STATUS_META.OPEN;
   const prio = PRIORITY_META[ticket.priority];
 
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
-  const [commenting, setCommenting] = useState(false);
-  const [updatingStatus, setUpdatingStatus] = useState(false);
-  const [selectedStatus, setSelectedStatus] = useState(ticket.status); // Új állapot a dropdownhoz
-  const [currentStatus, setCurrentStatus] = useState(ticket.status);
-  const [assigning, setAssigning] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Státusz és Kiosztás állapotok
+  const [selectedStatus, setSelectedStatus] = useState(ticket.status);
+
+  // Autocomplete (Debounced Search) állapotok
+  const [assigneeSearchText, setAssigneeSearchText] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState(null);
+  const [selectedAssigneeName, setSelectedAssigneeName] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+
+  const canManage = userRole === 'ADMIN' || userRole === 'SUPPORT';
+
+  // 1. Kommentek lekérése
   useEffect(() => {
+    // JAVÍTÁS: Backtick (`) használata a string interpolációhoz!
     apiFetch(`/api/tickets/${ticket.id}/comments`)
         .then(setComments)
         .catch(err => console.error("Kommentek hiba:", err));
   }, [ticket.id]);
 
-  const handleAddComment = async () => {
-    if (!newComment.trim() && currentStatus === selectedStatus) return; // Ne küldjön üres kérést
+  // 2. Debouncing effekt: Várakozás gépelés közben (300ms)
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(assigneeSearchText);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [assigneeSearchText]);
 
-    setCommenting(true);
+  // 3. Keresés effekt: Ha a debounced text változik, lekérjük a szervertől
+  useEffect(() => {
+    if (canManage && debouncedSearch.length >= 2 && !selectedAssigneeId) {
+      // JAVÍTÁS: Backtick (`) használata
+      apiFetch(`/api/users/search-staff?query=${debouncedSearch}`)
+          .then(setSearchResults)
+          .catch(err => console.error("Keresés hiba:", err));
+    } else {
+      setSearchResults([]);
+    }
+  }, [debouncedSearch, canManage, selectedAssigneeId]);
+
+  // Validáció
+  const statusChanged = selectedStatus !== ticket.status;
+  const assigneeChanged = selectedAssigneeId !== null;
+  const needsActionComment = statusChanged || assigneeChanged;
+  const isCommentEmpty = newComment.trim() === '';
+
+  const isSubmitDisabled = isSubmitting || (needsActionComment && isCommentEmpty) || (!needsActionComment && isCommentEmpty);
+
+  const handleActionSubmit = async () => {
+    setIsSubmitting(true);
+    let systemMsgs = [];
+    let shouldReload = false;
+
     try {
-      let commentText = newComment;
-
-      // 1. Állapot módosítás (Ha volt változás és a user Support/Admin)
-      if (currentStatus !== selectedStatus && canChangeStatus) {
-        setUpdatingStatus(true);
-        try {
-          await apiFetch(`/api/tickets/${ticket.id}/status?status=${selectedStatus}`, { method: 'PUT' });
-          setCurrentStatus(selectedStatus);
-          ticket.status = selectedStatus; // Update local ticket prop temporarily
-
-          // Rendszerüzenet hozzáfűzése a kommenthez
-          const systemMessage = `[Rendszerüzenet: Állapot módosítva erre: ${STATUS_META[selectedStatus].label}]`;
-          commentText = commentText ? `${commentText}\n\n${systemMessage}` : systemMessage;
-        } catch (err) {
-          alert("Hiba a státusz módosításakor: " + (err.error || err.message));
-          setUpdatingStatus(false);
-          setCommenting(false);
-          return; // Álljunk meg, ha a státuszváltás hiba volt
-        }
-        setUpdatingStatus(false);
+      // 1. Státusz frissítés
+      if (statusChanged) {
+        // JAVÍTÁS: Backtick (`) használata a string interpolációhoz!
+        await apiFetch(`/api/tickets/${ticket.id}/status?status=${selectedStatus}`, { method: 'PUT' });
+        systemMsgs.push(`Státusz módosítva: ${STATUS_META[selectedStatus].label}`);
+        shouldReload = true;
       }
 
-      // 2. Komment beküldése
-      if (commentText.trim()) {
-        const res = await apiFetch(`/api/tickets/${ticket.id}/comments`, {
+      // 2. Felelős frissítés
+      if (assigneeChanged) {
+        // JAVÍTÁS: Backtick (`) használata a string interpolációhoz!
+        await apiFetch(`/api/tickets/${ticket.id}/assign?assigneeId=${selectedAssigneeId}`, { method: 'PUT' });
+        systemMsgs.push(`Új felelős: ${selectedAssigneeName}`);
+        shouldReload = true;
+      }
+
+      // 3. Komment összeállítása
+      let finalComment = newComment.trim();
+      if (systemMsgs.length > 0) {
+        const sysText = `[Rendszerüzenet: ${systemMsgs.join(' | ')}]`;
+        finalComment = `${sysText}\n\n${finalComment}`;
+      }
+
+      // 4. Komment beküldése
+      if (finalComment) {
+        // JAVÍTÁS: Backtick (`) használata a string interpolációhoz!
+        await apiFetch(`/api/tickets/${ticket.id}/comments`, {
           method: 'POST',
-          body: JSON.stringify({ content: commentText })
+          body: JSON.stringify({ content: finalComment })
         });
-        setComments([...comments, res]);
+        shouldReload = true;
       }
+
+      // Tiszta lap és frissítés
       setNewComment('');
+      setSelectedAssigneeId(null);
+      setAssigneeSearchText('');
+      if (shouldReload) onUpdate(); // Szól a szülőnek (az App komponensnek), hogy töltse újra a jegyeket!
     } catch (err) {
-      alert("Hiba a komment elküldésekor: " + err.message);
+      alert("Hiba történt: " + (err.error || err.message));
     } finally {
-      setCommenting(false);
+      setIsSubmitting(false);
     }
   };
-
-
-  const handleAssign = async () => {
-    setAssigning(true);
-    try {
-      const updatedTicket = await apiFetch(`/api/tickets/${ticket.id}/assign`, { method: 'PUT' });
-      ticket.assigneeUsername = updatedTicket.assigneeUsername;
-      ticket.status = updatedTicket.status;
-      setCurrentStatus(updatedTicket.status);
-      setSelectedStatus(updatedTicket.status); // Frissítsük a dropdown-t is
-
-      // Adjunk hozzá egy rendszerkommentet a kiosztásról is (Opcionális, de hasznos)
-      const res = await apiFetch(`/api/tickets/${ticket.id}/comments`, {
-        method: 'POST',
-        body: JSON.stringify({ content: `[Rendszerüzenet: ${username} magára osztotta a jegyet.]` })
-      });
-      setComments(prev => [...prev, res]);
-
-    } catch (err) {
-      alert("Hiba a kiosztáskor: " + (err.error || err.message));
-    } finally {
-      setAssigning(false);
-    }
-  };
-
-  const canChangeStatus = userRole === 'ADMIN' || userRole === 'SUPPORT';
-  const displayMeta = STATUS_META[currentStatus] || STATUS_META.OPEN;
 
   return (
       <div className="max-w-3xl pb-10">
@@ -393,25 +412,11 @@ function TicketDetail({ ticket, onBack, userRole, username }) {
               <h2 className="text-2xl mt-1" style={{ color: colors.ink, fontWeight: 800 }}>{ticket.title}</h2>
               <p className="text-sm mt-2 flex items-center gap-2" style={{ color: colors.inkSoft }}>
                 Beküldte: {ticket.authorUsername} · {formatDate(ticket.createdAt)}
-
-                {ticket.assigneeUsername ? (
-                    <> · Felelős: <strong style={{color: colors.primary}}>{ticket.assigneeUsername}</strong></>
-                ) : (
-                    canChangeStatus && (
-                        <button
-                            onClick={handleAssign}
-                            disabled={assigning}
-                            className="ml-2 px-2 py-0.5 rounded text-xs font-bold transition"
-                            style={{ background: colors.accent, color: '#fff', opacity: assigning ? 0.5 : 1 }}
-                        >
-                          {assigning ? 'Kiosztás...' : 'Magamra osztom'}
-                        </button>
-                    )
-                )}
+                {ticket.assigneeUsername && <> · Felelős: <strong style={{color: colors.primary}}>{ticket.assigneeUsername}</strong></>}
               </p>
             </div>
-            <span className="text-xs uppercase tracking-wide px-3 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0" style={{ color: displayMeta.color, background: colors.bg, fontWeight: 700 }}>
-            <displayMeta.icon size={13} /> {displayMeta.label}
+            <span className="text-xs uppercase tracking-wide px-3 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0" style={{ color: meta.color, background: colors.bg, fontWeight: 700 }}>
+            <meta.icon size={13} /> {meta.label}
           </span>
           </div>
 
@@ -433,9 +438,8 @@ function TicketDetail({ ticket, onBack, userRole, username }) {
           </div>
         </div>
 
-        {/* Comments Section */}
         <div className="rounded-2xl p-6" style={{ background: colors.surface, border: `1px solid ${colors.border}` }}>
-          <h3 className="text-lg mb-4" style={{ color: colors.ink, fontWeight: 800 }}>Hozzászólások ({comments.length})</h3>
+          <h3 className="text-lg mb-4" style={{ color: colors.ink, fontWeight: 800 }}>Hozzászólások és Előzmények</h3>
 
           <div className="space-y-4 mb-6">
             {comments.map(c => (
@@ -451,41 +455,107 @@ function TicketDetail({ ticket, onBack, userRole, username }) {
             {comments.length === 0 && <p className="text-sm italic" style={{ color: colors.inkSoft }}>Még nincsenek hozzászólások.</p>}
           </div>
 
-          <div className="pt-4 border-t" style={{ borderColor: colors.border }}>
-            {/* Státuszválasztó Dropdown (Csak ha módosíthatja) */}
-            {canChangeStatus && (
-                <div className="mb-4">
-                  <label className="text-xs font-bold block mb-1" style={{ color: colors.inkSoft }}>Jegy státusza:</label>
-                  <select
-                      value={selectedStatus}
-                      onChange={(e) => setSelectedStatus(e.target.value)}
-                      className="p-2 rounded text-sm outline-none w-full md:w-auto"
-                      style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
-                  >
-                    {Object.keys(STATUS_META).map(key => (
-                        <option key={key} value={key}>{STATUS_META[key].label}</option>
-                    ))}
-                  </select>
+          {/* ACTION BAR: Státusz, Kiosztás és Komment egyben */}
+          <div className="pt-5 border-t" style={{ borderColor: colors.border }}>
+
+            {canManage && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-5">
+                  {/* Státusz dropdown */}
+                  <div>
+                    <label className="text-xs font-bold block mb-1.5" style={{ color: colors.inkSoft }}>Státusz módosítása</label>
+                    <select
+                        value={selectedStatus}
+                        onChange={(e) => setSelectedStatus(e.target.value)}
+                        className="w-full p-2.5 rounded-lg text-sm outline-none transition"
+                        style={{ border: `1px solid ${colors.border}`, background: statusChanged ? '#EAF3EC' : colors.bg }}
+                    >
+                      {Object.keys(STATUS_META).map(key => (
+                          <option key={key} value={key}>{STATUS_META[key].label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Kiosztás Autocomplete (Debounced) */}
+                  <div className="relative">
+                    <label className="text-xs font-bold block mb-1.5" style={{ color: colors.inkSoft }}>Felelős hozzárendelése</label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-2.5" size={16} color={colors.inkSoft} />
+                      <input
+                          type="text"
+                          value={selectedAssigneeName || assigneeSearchText}
+                          onChange={(e) => {
+                            setAssigneeSearchText(e.target.value);
+                            setSelectedAssigneeId(null);
+                            setSelectedAssigneeName('');
+                            setShowDropdown(true);
+                          }}
+                          onFocus={() => setShowDropdown(true)}
+                          onBlur={() => setTimeout(() => setShowDropdown(false), 200)} // JAVÍTÁS: Kis késleltetés bezárás előtt
+                          placeholder="Kezdj gépelni (min 2 betű)..."
+                          className="w-full pl-10 pr-8 py-2.5 rounded-lg text-sm outline-none transition"
+                          style={{ border: `1px solid ${colors.border}`, background: assigneeChanged ? '#EAF3EC' : colors.bg }}
+                      />
+
+                      {selectedAssigneeId && (
+                          <button
+                              onClick={() => { setSelectedAssigneeId(null); setSelectedAssigneeName(''); setAssigneeSearchText(''); }}
+                              className="absolute right-3 top-2.5 text-xs text-gray-500 hover:text-red-500 font-bold"
+                          >
+                            X
+                          </button>
+                      )}
+
+                      {/* Dropdown lista a találatokkal */}
+                      {showDropdown && assigneeSearchText.length >= 2 && !selectedAssigneeId && (
+                          <div className="absolute z-10 w-full mt-1 bg-white rounded-lg shadow-lg border max-h-48 overflow-y-auto" style={{ borderColor: colors.border }}>
+                            {searchResults.length > 0 ? (
+                                searchResults.map(u => (
+                                    <div
+                                        key={u.id}
+                                        // JAVÍTÁS: onClick helyett onMouseDown, mert ez lefut az onBlur ELŐTT!
+                                        onMouseDown={() => {
+                                          setSelectedAssigneeName(u.username);
+                                          setSelectedAssigneeId(u.id);
+                                          setShowDropdown(false);
+                                        }}
+                                        className="p-3 text-sm hover:bg-gray-50 cursor-pointer flex justify-between items-center"
+                                    >
+                                      <span style={{ fontWeight: 600 }}>{u.username}</span>
+                                      <span className="text-[10px] uppercase bg-gray-100 px-2 py-0.5 rounded">{u.role}</span>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="p-3 text-sm italic" style={{ color: colors.inkSoft }}>Nincs találat erre: "{assigneeSearchText}"</div>
+                            )}
+                          </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
             )}
 
-            <textarea
-                rows={4}
-                value={newComment}
-                onChange={e => setNewComment(e.target.value)}
-                className="w-full p-3 rounded-lg text-sm outline-none resize-none mb-2"
-                style={{ border: `1px solid ${colors.border}`, background: colors.bg }}
-                placeholder={canChangeStatus && currentStatus !== selectedStatus ? "Írj egy hozzászólást a státuszváltáshoz (opcionális)..." : "Írj egy hozzászólást..."}
-            />
+            <div>
+              <label className="text-xs font-bold block mb-1.5" style={{ color: colors.inkSoft }}>
+                {needsActionComment ? <span style={{ color: colors.red }}>Indoklás (Kötelező a módosításhoz)</span> : 'Hozzászólás'}
+              </label>
+              <textarea
+                  rows={4}
+                  value={newComment}
+                  onChange={e => setNewComment(e.target.value)}
+                  className="w-full p-3 rounded-lg text-sm outline-none resize-none mb-3 transition focus:ring-2"
+                  style={{ border: `1px solid ${colors.border}`, background: colors.bg, ringColor: colors.primarySoft }}
+                  placeholder={needsActionComment ? "Kérlek, írd le miért történt a változtatás..." : "Írj egy hozzászólást (Enterek és formázások megmaradnak)..."}
+              />
 
-            <button
-                onClick={handleAddComment}
-                disabled={commenting || (!newComment.trim() && currentStatus === selectedStatus)}
-                className="px-4 py-2 rounded-lg text-sm transition"
-                style={{ background: colors.primary, color: '#fff', fontWeight: 700, opacity: (commenting || (!newComment.trim() && currentStatus === selectedStatus)) ? 0.6 : 1 }}
-            >
-              {commenting || updatingStatus ? 'Küldés...' : (currentStatus !== selectedStatus ? 'Módosítás és Küldés' : 'Hozzászólás küldése')}
-            </button>
+              <button
+                  onClick={handleActionSubmit}
+                  disabled={isSubmitDisabled}
+                  className="px-5 py-2.5 rounded-lg text-sm transition w-full sm:w-auto"
+                  style={{ background: colors.primary, color: '#fff', fontWeight: 700, opacity: isSubmitDisabled ? 0.5 : 1 }}
+              >
+                {isSubmitting ? 'Feldolgozás...' : (needsActionComment ? 'Módosítás és Hozzászólás' : 'Hozzászólás elküldése')}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -506,7 +576,6 @@ function NewTicket({ onBack, onCreated }) {
     try {
       await apiFetch('/api/tickets', {
         method: 'POST',
-        // FONTOS: a backendből kiszedtük az authorId-t, mert a tokenből olvassa ki!
         body: JSON.stringify({ title, description, priority }),
       });
       onCreated();
@@ -583,16 +652,18 @@ export default function App() {
   const [tickets, setTickets] = useState([]);
   const [loadError, setLoadError] = useState('');
 
-  const loadTickets = () => {
-    apiFetch('/api/tickets')
-        .then(setTickets)
-        .catch((err) => {
-          if (err.message === 'UNAUTHORIZED') {
-            setToken(null);
-          } else {
-            setLoadError('Nem sikerült betölteni a jegyeket.');
-          }
-        });
+  const loadTickets = async () => {
+    try {
+      const data = await apiFetch('/api/tickets');
+      setTickets(data);
+      if (selected) {
+        const updatedSelected = data.find(t => t.id === selected.id);
+        if (updatedSelected) setSelected(updatedSelected);
+      }
+    } catch (err) {
+      if (err.message === 'UNAUTHORIZED') setToken(null);
+      else setLoadError('Nem sikerült betölteni a jegyeket.');
+    }
   };
 
   useEffect(() => {
@@ -670,7 +741,13 @@ export default function App() {
               )}
 
               {view === 'detail' && selected && (
-                  <TicketDetail ticket={selected} onBack={() => { setView('list'); loadTickets(); }} userRole={userRole} username={username} token={token} />
+                  <TicketDetail
+                      ticket={selected}
+                      onBack={() => { setView('list'); loadTickets(); }}
+                      userRole={userRole}
+                      username={username}
+                      onUpdate={loadTickets}
+                  />
               )}
 
               {view === 'new' && (
