@@ -28,6 +28,19 @@ async function apiFetch(path, options = {}) {
   return res.status === 204 ? null : res.json();
 }
 
+// A JwtService a "subject" claimbe teszi a usernevet (subject(userDetails.getUsername())),
+// ezt olvassuk ki itt kliens oldalon, csak megjelenítés céljából (nincs aláírás-ellenőrzés).
+function getUsernameFromToken(token) {
+  if (!token) return null;
+  try {
+    const payload = token.split('.')[1];
+    const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return decoded.sub || null;
+  } catch {
+    return null;
+  }
+}
+
 // --- Design tokens -----------------------------------------------------
 const colors = {
   bg: '#F4F8F5',
@@ -434,6 +447,9 @@ export default function App() {
     setToken(null);
   };
 
+  const username = getUsernameFromToken(token);
+  const avatarInitials = username ? username.slice(0, 2).toUpperCase() : '?';
+
   const filtered = filter === 'all' ? tickets : tickets.filter(t => t.status === filter);
   const filterLabel = {
     all: 'Összes jegy',
@@ -459,8 +475,12 @@ export default function App() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm flex-shrink-0" style={{ background: '#BFE0CC', color: colors.primary, fontWeight: 700 }}>
-                SD
+              <div
+                  className="w-9 h-9 rounded-full flex items-center justify-center text-sm flex-shrink-0"
+                  style={{ background: '#BFE0CC', color: colors.primary, fontWeight: 700 }}
+                  title={username || ''}
+              >
+                {avatarInitials}
               </div>
               <button onClick={handleLogout} title="Kijelentkezés" style={{ color: '#BFE0CC' }}>
                 <LogOut size={18} />
